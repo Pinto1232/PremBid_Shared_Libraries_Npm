@@ -1,0 +1,83 @@
+# Node.js
+# Build a general Node.js project with npm.
+# Add steps that analyze code, save build artifacts, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/javascript
+
+name: $(Year:yyyy).$(Month).$(DayOfMonth)$(Rev:.r)
+
+trigger:
+  - master
+
+variables:
+  workDir: ""
+  companyName: "RandRTech"
+  projectName: "PremBid"
+  feedName: "prembid"
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: npmAuthenticate@0
+    inputs:
+      workingFile: .npmrc
+  - task: NodeTool@0
+    inputs:
+      versionSpec: "14.x"
+    displayName: "Installing Node.js"
+
+  - task: Bash@3
+    displayName: "Update patch number"
+    env:
+      companyName: "$(companyName)"
+      projectName: "$(projectName)"
+      feedName: "$(feedName)"
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+    inputs:
+      targetType: "inline"
+      script: |
+        # Get package name and version from package.json file
+        packageName=$(jq -r ".name" package.json)
+        echo Package name: $packageName
+        package_version=$(jq -r ".version" package.json)
+        echo Package version: $package_version
+        get_package_id_URL="https://feeds.dev.azure.com/${companyName}/${projectName}/_apis/packaging/Feeds/${feedName}/packages?protocolType=Npm&packageNameQuery=$packageName"
+        echo Package url: $get_package_id_URL
+        # next, let's get all available versions for our package
+        all_versions_URL=$(curl -s -X GET -u PATUSER:$SYSTEM_ACCESSTOKEN $get_package_id_URL | jq -r '.value[0]._links.versions.href')
+        all_versions=$(curl -s -X GET -u PATUSER:$SYSTEM_ACCESSTOKEN $all_versions_URL | jq -r '.value[].version')
+        all=($all_versions)
+        echo Package version: $all_versions
+
+        # if we find out that the version we're trying to publish already exists in the feed, then let's increment patch version for that package and publish
+        if [[ " ${all[@]} " =~ " ${package_version} " ]]
+        then
+          echo Current package version found in existing packages. Iterating the patch number...
+          # get latest version currently published in the feed for our package
+          latest_version=$(curl -s -X GET -u PATUSER:$SYSTEM_ACCESSTOKEN $get_package_id_URL| jq -r '.value[].versions[].version')
+          IFS=. read i1 i2 i3 <<< "$latest_version"
+          i3_updated=$((i3 + 1))
+          new_version=$i1.$i2.$i3_updated
+          new_buildnumber=$i1.$i2.$i3_updated
+          echo New package version: $new_version
+          # update patch number variable
+          echo "##vso[task.setvariable variable=patch;]$i3_updated"
+          # update build number of the current build. let's keep things tidy
+          echo "##vso[build.updatebuildnumber]$new_buildnumber"
+          echo Replacing \"version\": \"$package_version\" with \"version\": \"$new_version\" in local package.json
+          sed -i 's/"version": "'${package_version}'"/"version": "'${new_version}'"/' package.json
+          echo new package.json version: $(jq -r ".version" package.json)
+        fi
+  - script: |
+      curl -o- -L https://yarnpkg.com/install.sh | bash
+    displayName: "Install Yarn"
+  - script: |
+      yarn install
+    displayName: "Install dependencies with Yarn"
+  - task: Npm@1
+    displayName: "Publish package to registry"
+    inputs:
+      command: publish
+      workingDir: "$(workDir)"
+      publishRegistry: useFeed
+      publishFeed: "$(projectName)/$(feedName)"

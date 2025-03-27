@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "jsx": "react",
+    "target": "es5",
+    "module": "commonjs",
+    "declaration": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "composite": true,
+    "skipLibCheck": true
+  }
+}
